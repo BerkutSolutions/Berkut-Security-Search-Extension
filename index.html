@@ -1,0 +1,141 @@
+<!--
+  This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+  If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+-->
+  
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Berkut Security Search</title>
+    <link rel="icon" type="image/svg+xml" href="https://www.svgrepo.com/show/532553/search.svg">
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/leaflet.css">
+    <script src="js/leaflet.js"></script>
+    <script src="js/sql-wasm.js"></script>
+    <script src="js/db.js"></script>
+    <script src="js/tiles.js"></script>
+    <script src="js/map.js"></script>
+    <script src="js/main.js"></script>
+</head>
+<body>
+    <div class="main-container">
+        <div class="left-column">
+            <button id="add-site-btn" class="left-menu-button">Добавить сайт</button>
+            <button id="export-tiles-btn" class="left-menu-button">Экспорт плиток</button>
+            <button id="import-tiles-btn" class="left-menu-button">
+                <input id="import-file-input" type="file" accept=".json" style="display: none;">
+                <span style="display: block; text-align: center;">Импорт плиток</span>
+            </button>
+        </div>
+        <div class="center-column">
+            <h1>Berkut Security Search</h1>
+            <div class="tiles" id="tiles">
+                <p class="debug-tiles">Загрузка плиток...</p>
+            </div>
+            <div class="search-container">
+                <form id="search-form" style="display: inline-flex; align-items: center;">
+                    <input type="text" id="query" name="query" placeholder="Введите запрос..." required class="search-input">
+                    <button type="submit" class="search-button">Поиск</button>
+                    <form id="update-db-form" style="display: inline-flex; align-items: center;">
+                        <button type="submit" class="search-button update-db-button">Обновить базу</button>
+                    </form>
+                </form>
+                <div id="history-list" class="history-list"></div>
+            </div>
+            <div id="results"></div>
+        </div>
+        <div class="right-column">
+            <h3>Информация</h3>
+            <div class="ip-info">
+                <p><strong>IP:</strong> <span id="ip">Загрузка...</span></p>
+                <p><strong>Страна:</strong> <span id="country">Загрузка...</span></p>
+                <p><strong>Город:</strong> <span id="city"></span></p>
+            </div>
+            <div class="map-container" id="map"></div>
+            <button id="settings-btn" class="settings-button"><span class="gear-icon">⚙️</span></button>
+        </div>
+    </div>
+    <div class="footer">
+        <div class="footer-column"></div>
+        <div class="footer-column"><span>Powered by <a href="https://github.com/BerkutSolutions" target="_blank">BerkutSolutions</a></span></div>
+        <div class="footer-column"></div>
+    </div>
+    <div id="modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal" role="document">
+            <h2 id="modal-title"></h2>
+            <div id="modal-meta" class="modal-meta"></div>
+            <div id="modal-body" class="modal-content"></div>
+            <button id="modal-close-btn" class="modal-close-btn">Закрыть</button>
+        </div>
+    </div>
+    <div id="add-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title-add">
+        <div class="add-modal" role="document">
+            <h2 id="modal-title-add"></h2>
+            <form id="add-tile-form" class="add-tile-form">
+                <input type="text" id="site_name" name="site_name" placeholder="Название сайта" required>
+                <input type="url" id="site_url" name="site_url" placeholder="URL сайта" value="https://" required>
+                <input type="hidden" id="edit_index" name="edit_index">
+                <input type="hidden" id="edit_url" name="edit_url">
+                <button type="submit" name="add_tile">Сохранить</button>
+            </form>
+        </div>
+    </div>
+    <div id="delete-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title-delete">
+        <div class="delete-modal" role="document">
+            <h2 id="modal-title-delete"></h2>
+            <p>Вы уверены, что хотите удалить сайт "<span id="delete-site-name"></span>"?</p>
+            <form id="delete-tile-form" class="add-tile-form">
+                <input type="hidden" id="delete_tile" name="delete_tile">
+                <input type="hidden" id="delete_url" name="delete_url">
+                <button type="button" id="delete-btn">Удалить</button>
+                <button type="button" id="cancel-delete-btn" class="cancel-btn">Отмена</button>
+            </form>
+        </div>
+    </div>
+    <div id="settings-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title-settings">
+        <div class="settings-modal" role="document">
+            <h2 id="modal-title-settings">Настройки</h2>
+            <form id="settings-form" class="add-tile-form">
+                <select id="db_source" name="db_source">
+                    <option value="txt">Локальный TXT</option>
+                    <option value="local_csv">Локальный CSV</option>
+                </select>
+                <input type="file" id="db_file" name="db_file" accept=".csv,.txt" class="db-path-visible">
+                <button type="submit">Сохранить настройки</button>
+                <button type="button" id="clear-history-btn">Очистить историю поиска</button>
+                <button type="button" id="delete-db-btn" class="delete-db-btn">Удалить базу данных</button>
+                <button type="button" id="cancel-settings-btn" class="cancel-btn">Отмена</button>
+            </form>
+        </div>
+    </div>
+    <div id="init-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title-init">
+        <div class="init-modal" role="document">
+            <h2 id="modal-title-init">Инициализация базы данных</h2>
+            <p>База данных отсутствует или пуста. Выберите источник для инициализации:</p>
+            <form id="init-form" class="add-tile-form">
+                <select id="init_db_source" name="db_source">
+                    <option value="txt">Локальный TXT</option>
+                    <option value="local_csv">Локальный CSV</option>
+                </select>
+                <input type="file" id="init_db_file" name="db_file" accept=".csv,.txt" class="db-path-visible">
+                <button type="submit" id="init-db-btn">Инициализировать</button>
+                <button type="button" id="cancel-init-btn" class="cancel-btn">Отмена</button>
+            </form>
+        </div>
+    </div>
+    <div id="success-notification" class="success-notification"></div>
+    <div id="context-menu" class="context-menu">
+        <div id="edit-tile">Редактировать</div>
+        <div id="delete-tile">Удалить</div>
+    </div>
+    <div id="update-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title-update">
+        <div class="update-modal" role="document">
+            <h2 id="modal-title-update">База данных обновлена</h2>
+            <p id="update-info-text"></p>
+            <button type="button" id="close-update-btn">Закрыть и вернуться</button>
+        </div>
+    </div>
+</body>
+</html>

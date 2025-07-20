@@ -1,0 +1,25 @@
+C:\Users\berkut\Desktop\search2/
+├── css
+│   ├── leaflet.css
+│   └── styles.css
+├── data
+│   ├── fs_em — копия.csv
+│   ├── fs_em — копия.txt
+│   ├── fs_em.csv
+│   └── fs_em.txt
+├── icons
+│   ├── icon128.png
+│   ├── icon16.png
+│   ├── icon32.png
+│   └── icon48.png
+├── index.html
+├── js
+│   ├── background.js
+│   ├── db.js
+│   ├── leaflet.js
+│   ├── main.js
+│   ├── map.js
+│   ├── sql-wasm.js
+│   ├── sql-wasm.wasm
+│   └── tiles.js
+├── manifest.json
