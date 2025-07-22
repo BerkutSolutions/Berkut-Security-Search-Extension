@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Berkut Security Search",
-  "version": "1.0",
+  "version": "1.0.1",
   "description": "Расширение для безопасного поиска с проверкой на запрещённые материалы",
   "permissions": [
     "storage",
