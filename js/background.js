@@ -3,14 +3,36 @@
  * If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-const CURRENT_VERSION = "1.0.1";
+// Функция сравнения версий (x.y.z)
+function compareVersions(currentVersion, latestVersion) {
+  console.log('Сравнение версий:', { currentVersion, latestVersion });
+  const currentParts = currentVersion.split('.').map(Number);
+  const latestParts = latestVersion.split('.').map(Number);
+
+  for (let i = 0; i < Math.max(currentParts.length, latestParts.length); i++) {
+    const current = currentParts[i] || 0;
+    const latest = latestParts[i] || 0;
+    if (latest > current) {
+      console.log(`Обновление доступно: ${latestVersion} > ${currentVersion}`);
+      return true; 
+    }
+    if (current > latest) {
+      console.log(`Текущая версия новее или равна: ${currentVersion} >= ${latestVersion}`);
+      return false;
+    }
+  }
+  console.log(`Версии равны: ${currentVersion} = ${latestVersion}`);
+  return false;
+}
 
 chrome.action.onClicked.addListener(() => {
+  console.log('Открытие всплывающего окна расширения');
   chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getIpInfo') {
+    console.log('Запрос информации об IP');
     fetch('http://ip-api.com/json/', {
       mode: 'cors',
       headers: {
@@ -23,6 +45,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       })
       .then(data => {
         if (data.status === 'success') {
+          console.log('IP информация получена:', data);
           sendResponse({
             ip: data.query || 'Неизвестно',
             country: data.country || 'Неизвестно',
@@ -31,6 +54,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             lon: data.lon || 0.0
           });
         } else {
+          console.warn('IP API вернул неуспешный статус:', data);
           sendResponse({
             ip: 'Не удалось определить',
             country: 'Не удалось определить',
@@ -51,6 +75,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
       });
   } else if (request.action === 'checkForUpdates') {
+    console.log('Проверка обновлений');
+    const currentVersion = chrome.runtime.getManifest().version;
     fetch('https://api.github.com/repos/BerkutSolutions/Berkut-Security-Search-Extension/releases/latest')
       .then(response => {
         if (!response.ok) throw new Error('Ошибка проверки обновлений');
@@ -58,9 +84,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       })
       .then(data => {
         const latestVersion = data.tag_name.replace(/^v/, '');
+        const updateAvailable = compareVersions(currentVersion, latestVersion);
+        console.log('Результат проверки обновлений:', { updateAvailable, currentVersion, latestVersion });
         sendResponse({
-          updateAvailable: latestVersion !== CURRENT_VERSION,
-          latestVersion: latestVersion
+          updateAvailable,
+          latestVersion
         });
       })
       .catch(e => {
@@ -68,5 +96,5 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ updateAvailable: false, error: e.message });
       });
   }
-  return true;
+  return true; // Для асинхронного ответа
 });
