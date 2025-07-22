@@ -2,7 +2,6 @@
   This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
   If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 -->
-  
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -103,6 +102,8 @@
                     <option value="local_csv">Локальный CSV</option>
                 </select>
                 <input type="file" id="db_file" name="db_file" accept=".csv,.txt" class="db-path-visible">
+                <label><input type="checkbox" id="auto_update" name="auto_update" checked> Автоматическая проверка обновлений</label>
+                <button type="button" id="check-update-btn">Проверить обновления</button>
                 <button type="submit">Сохранить настройки</button>
                 <button type="button" id="clear-history-btn">Очистить историю поиска</button>
                 <button type="button" id="delete-db-btn" class="delete-db-btn">Удалить базу данных</button>
@@ -135,6 +136,13 @@
             <h2 id="modal-title-update">База данных обновлена</h2>
             <p id="update-info-text"></p>
             <button type="button" id="close-update-btn">Закрыть и вернуться</button>
+        </div>
+    </div>
+    <div id="update-available-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title-update-available">
+        <div class="update-modal" role="document">
+            <h2 id="modal-title-update-available">Доступно обновление</h2>
+            <p>Версия <span id="update-available-version"></span> доступна. Пожалуйста, обновите приложение на <a href="https://github.com/BerkutSolutions/Berkut-Security-Search-Extension/releases/latest">GitHub</a>.</p>
+            <button type="button" id="close-update-available-btn">Закрыть</button>
         </div>
     </div>
 </body>

@@ -3,6 +3,54 @@
  * If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+const CURRENT_VERSION = "1.0.0";
+
+// Функция для вычисления расстояния Левенштейна
+function levenshteinDistance(a, b) {
+  const matrix = Array(b.length + 1).fill().map(() => Array(a.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
+  for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
+  for (let j = 1; j <= b.length; j++) {
+    for (let i = 1; i <= a.length; i++) {
+      const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[j][i] = Math.min(
+        matrix[j][i - 1] + 1, // удаление
+        matrix[j - 1][i] + 1, // вставка
+        matrix[j - 1][i - 1] + indicator // замена
+      );
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+function createWordIndex(text) {
+  const normalized = text.toLowerCase().replace(/[^\wа-яА-Я\s"]/g, '').replace(/\s+/g, ' ').trim();
+  const sentences = normalized.split(/[.!?]+/).filter(s => s.trim());
+  const wordIndex = {};
+  let globalPosition = 0;
+  sentences.forEach((sentence, sentenceIndex) => {
+    const words = sentence.trim().split(' ').filter(word => word.length > 1);
+    words.forEach((word, index) => {
+      if (!wordIndex[word]) wordIndex[word] = [];
+      wordIndex[word].push({ sentence: sentenceIndex, position: globalPosition + index });
+    });
+    globalPosition += words.length;
+  });
+  return wordIndex;
+}
+
+function getWordForms(word) {
+  const forms = [word];
+  if (word.match(/[а-яА-Я]+$/)) {
+    const base = word.replace(/[йяю]$/, '');
+    forms.push(
+      `${base}а`, `${base}у`, `${base}е`, `${base}ом`, `${base}ым`,
+      `${base}и`, `${base}ей`, `${base}ям`, `${base}ями`
+    );
+  }
+  return forms.filter(form => form.length > 1);
+}
+
 async function openDB() {
   console.log('Открытие базы данных BerkutDB');
   return new Promise((resolve, reject) => {
@@ -14,6 +62,7 @@ async function openDB() {
         console.log('Создание objectStore restricted_materials');
         const store = db.createObjectStore('restricted_materials', { keyPath: 'id' });
         store.createIndex('material', 'material', { unique: false });
+        store.createIndex('word_index', 'word_index', { unique: false });
       }
       if (!db.objectStoreNames.contains('settings')) {
         console.log('Создание objectStore settings');
@@ -41,7 +90,7 @@ async function deleteDB() {
     const request = indexedDB.deleteDatabase('BerkutDB');
     request.onsuccess = () => {
       console.log('База данных успешно удалена');
-      resolve();
+      resolve({ success: true });
     };
     request.onerror = (event) => {
       console.error('Ошибка удаления базы:', event.target.error);
@@ -161,7 +210,8 @@ async function initDB(dbSource, file) {
           }
           const date_match = entry.match(/\(решение .+? от ([0-9.]+)\)/) || ['', 'Не указана'];
           const date = date_match[1];
-          materials.push({ id: material_id, date, material: material_text });
+          const word_index = createWordIndex(material_text);
+          materials.push({ id: material_id, date, material: material_text, word_index });
           console.log('Добавлен материал:', material_id);
         }
       }
@@ -179,7 +229,8 @@ async function initDB(dbSource, file) {
               continue;
             }
             const date = row[2] || 'Не указана';
-            materials.push({ id: material_id, date, material: material_text });
+            const word_index = createWordIndex(material_text);
+            materials.push({ id: material_id, date, material: material_text, word_index });
             console.log('Добавлен материал:', material_id);
           }
         }
@@ -293,30 +344,135 @@ async function updateDB() {
 async function searchDB(query) {
   console.log('Поиск по запросу:', query);
   try {
-    const normalizedQuery = query.toLowerCase().trim();
+    // Очистка кэша для текущего запроса
+    const cacheKey = `search:${query.toLowerCase().trim()}`;
+    localStorage.removeItem(cacheKey); // Удаляем старый кэш
+
+    const normalizedQuery = query.toLowerCase().trim().replace(/[^\wа-яА-Я\s"]/g, '').replace(/\s+/g, ' ');
+    const stopWords = ['и', 'а', 'или', 'но'];
+    const queryWords = normalizedQuery.split(' ').filter(word => word.length > 1 && !stopWords.includes(word));
+    if (queryWords.length === 0) {
+      console.log('Нет значимых слов в запросе');
+      return [];
+    }
+    console.log('Слова запроса:', queryWords);
+    const wordForms = queryWords.length === 1 ? queryWords.map(word => getWordForms(word)).flat() : queryWords; // Словаформы только для однословных запросов
+    console.log('Проверяемые слова:', wordForms);
     const db = await openDB();
     const tx = db.transaction('restricted_materials', 'readonly');
     const store = tx.objectStore('restricted_materials');
-    const index = store.index('material');
     const results = await new Promise((resolve, reject) => {
       const matches = [];
       const request = store.openCursor();
       request.onsuccess = (event) => {
         const cursor = event.target.result;
         if (cursor) {
-          const material = cursor.value.material.toLowerCase();
-          if (material.includes(normalizedQuery)) {
-            matches.push(cursor.value);
+          const materialText = cursor.value.material?.toLowerCase().replace(/[^\wа-яА-Я\s"]/g, '').replace(/\s+/g, ' ') || '';
+          const wordIndex = cursor.value.word_index || {};
+          const titleMatch = materialText.match(/^"?([^"\n]+)"?(?:\s|$)/);
+          const title = titleMatch ? titleMatch[1].trim() : materialText.split('\n')[0].trim();
+          const normalizedTitle = title.toLowerCase().replace(/[^\wа-яА-Я\s"]/g, '').replace(/\s+/g, ' ');
+
+          // Проверка точного совпадения фразы или слов в любом порядке
+          const isExactPhraseMatch = materialText.includes(normalizedQuery) || normalizedTitle.includes(normalizedQuery);
+          const isWordMatch = queryWords.every(word => materialText.includes(word) || normalizedTitle.includes(word));
+
+          // Проверка слов с учётом близости
+          const checkWordProximity = (words, isForm = false) => {
+            if (words.length === 0) return { similarity: 0, matchedWordsLog: 'никакие' };
+            const matchedWords = words.map(word => {
+              if (wordIndex[word]) return { word, positions: wordIndex[word] };
+              // Опечатки только для однословных запросов
+              if (queryWords.length === 1) {
+                const similarWord = Object.keys(wordIndex).find(w => levenshteinDistance(word, w) <= Math.min(2, Math.floor(word.length / 3)));
+                return similarWord ? { word: similarWord, positions: wordIndex[similarWord] } : null;
+              }
+              return null;
+            }).filter(w => w);
+
+            // Проверяем, что найдены все слова запроса
+            const matchedWordsLog = matchedWords.length > 0 ? matchedWords.map(w => w.word).join(', ') : 'никакие';
+            if (matchedWords.length < queryWords.length) {
+              console.log(`Материал ${cursor.value.id}: пропущен, найдено ${matchedWords.length} из ${queryWords.length} слов: ${matchedWordsLog}`);
+              return { similarity: 0, matchedWordsLog };
+            }
+
+            // Проверяем, находятся ли слова в одном предложении
+            const sentenceMatches = {};
+            matchedWords.forEach(({ word, positions }) => {
+              positions.forEach(pos => {
+                if (!sentenceMatches[pos.sentence]) sentenceMatches[pos.sentence] = new Set();
+                sentenceMatches[pos.sentence].add(word);
+              });
+            });
+
+            // Проверяем, есть ли предложение с ВСЕМИ словами запроса
+            const validSentences = Object.keys(sentenceMatches).filter(sentence => {
+              const wordsInSentence = sentenceMatches[sentence];
+              return queryWords.every(qw => matchedWords.some(mw => wordsInSentence.has(mw.word) && (qw === mw.word || wordForms.includes(mw.word))));
+            });
+            if (!validSentences.length) {
+              console.log(`Материал ${cursor.value.id}: пропущен, слова не в одном предложении: ${matchedWordsLog}`);
+              return { similarity: 0, matchedWordsLog };
+            }
+
+            // Проверяем минимальное расстояние между словами в каждом предложении
+            let minDistance = Infinity;
+            validSentences.forEach(sentence => {
+              const positions = matchedWords
+                .flatMap(w => w.positions.filter(p => p.sentence === parseInt(sentence)).map(p => p.position))
+                .sort((a, b) => a - b);
+              if (positions.length < queryWords.length) return;
+              for (let i = 0; i <= positions.length - queryWords.length; i++) {
+                const distance = positions[i + queryWords.length - 1] - positions[i];
+                minDistance = Math.min(minDistance, distance);
+              }
+            });
+            if (minDistance === Infinity || minDistance > 2) {
+              console.log(`Материал ${cursor.value.id}: пропущен, расстояние ${minDistance} слишком большое, слова: ${matchedWordsLog}`);
+              return { similarity: 0, matchedWordsLog };
+            }
+
+            // Вычисляем схожесть
+            const baseSimilarity = minDistance <= 1 ? 1.0 : queryWords.length / (queryWords.length + minDistance * 0.4);
+            console.log(`Материал ${cursor.value.id}: similarity=${baseSimilarity}, minDistance=${minDistance}, isForm=${isForm}, matchedWords=${matchedWordsLog}`);
+            return { similarity: isForm ? baseSimilarity * 0.9 : baseSimilarity, matchedWordsLog };
+          };
+
+          // Проверяем точные слова или словоформы (для однословных запросов)
+          const exactResult = checkWordProximity(queryWords);
+          const formResult = queryWords.length === 1 && wordForms.length > queryWords.length ? checkWordProximity(wordForms, true) : { similarity: 0, matchedWordsLog: 'никакие' };
+          const similarity = Math.max(
+            exactResult.similarity,
+            formResult.similarity,
+            (isExactPhraseMatch || isWordMatch) ? 1.0 : 0
+          );
+          const matchedWordsLog = exactResult.similarity >= formResult.similarity ? exactResult.matchedWordsLog : formResult.matchedWordsLog;
+
+          // Порог для включения в результаты
+          const hasTypo = queryWords.length === 1 && queryWords.some(word => !wordIndex[word] && Object.keys(wordIndex).some(w => levenshteinDistance(word, w) <= Math.min(2, Math.floor(word.length / 3))));
+          const threshold = hasTypo ? 0.6 : 0.85;
+
+          if (similarity >= threshold) {
+            console.log(`Материал ${cursor.value.id} добавлен: similarity=${similarity}, threshold=${threshold}, matchedWords=${matchedWordsLog}`);
+            matches.push({
+              ...cursor.value,
+              similarity
+            });
+          } else {
+            console.log(`Материал ${cursor.value.id} пропущен: similarity=${similarity} < threshold=${threshold}, matchedWords=${matchedWordsLog}`);
           }
           cursor.continue();
         } else {
-          resolve(matches);
+          const sortedMatches = matches.sort((a, b) => b.similarity - a.similarity);
+          localStorage.setItem(cacheKey, JSON.stringify(sortedMatches));
+          console.log('Найдено записей:', sortedMatches.length);
+          resolve(sortedMatches);
         }
       };
       request.onerror = () => reject(request.error);
     });
     db.close();
-    console.log('Найдено записей:', results.length);
     return results;
   } catch (e) {
     console.error('Ошибка поиска:', e);

@@ -25,7 +25,7 @@ function highlightQuery(html, query) {
   }
 }
 
-function openModal(materialId) {
+function openModal(materialId, similarity) {
   const backdrop = document.getElementById('modal-backdrop');
   const titleEl = document.getElementById('modal-title');
   const metaEl = document.getElementById('modal-meta');
@@ -38,8 +38,8 @@ function openModal(materialId) {
   const rawText = hiddenEl.innerHTML;
   const date = hiddenEl.getAttribute('data-date');
   const q = backdrop.getAttribute('data-query');
-  titleEl.textContent = '№ ' + materialId;
-  metaEl.textContent = 'Дата: ' + (date || 'Не указана');
+  titleEl.textContent = `№ ${materialId}`;
+  metaEl.textContent = `Дата: ${date || 'Не указана'}`;
   contentEl.innerHTML = highlightQuery(rawText, q);
   backdrop.classList.add('show');
   document.getElementById('modal-close-btn').focus();
@@ -53,6 +53,7 @@ function closeModal() {
   document.getElementById('success-notification').classList.remove('show');
   document.getElementById('update-modal').classList.remove('show');
   document.getElementById('init-modal').classList.remove('show');
+  document.getElementById('update-available-modal').classList.remove('show');
 }
 
 function showContextMenu(event, name, url) {
@@ -154,10 +155,22 @@ async function saveSettings(event) {
   event.preventDefault();
   const dbSource = document.getElementById('db_source').value;
   const dbFile = document.getElementById('db_file').files[0];
+  const autoUpdate = document.getElementById('auto_update').checked;
   try {
     if ((dbSource === 'txt' || dbSource === 'local_csv') && !dbFile) throw new Error('Файл не выбран');
-    const settings = { db_source: dbSource, db_path: dbFile ? dbFile.name : '', hash: '' };
+    const settings = { db_source: dbSource, db_path: dbFile ? dbFile.name : '', hash: '', auto_update: autoUpdate };
     await saveSettingsDB(settings);
+    await new Promise((resolve, reject) => {
+      chrome.storage.local.set({ settings }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Ошибка сохранения настроек в chrome.storage:', chrome.runtime.lastError);
+          reject(chrome.runtime.lastError);
+        } else {
+          console.log('Настройки успешно сохранены в chrome.storage:', settings);
+          resolve();
+        }
+      });
+    });
     const result = await initDB(dbSource, dbFile);
     if (result.is_valid) {
       localStorage.removeItem('searchHistory');
@@ -176,6 +189,45 @@ async function saveSettings(event) {
     console.error('Ошибка при сохранении настроек:', error);
     document.getElementById('results').innerHTML = `<div class="notification">Ошибка при сохранении настроек: ${error.message}</div>`;
   }
+}
+
+async function loadSettings() {
+  return new Promise((resolve) => {
+    // Сначала пытаемся загрузить из chrome.storage.local
+    chrome.storage.local.get(['settings'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Ошибка загрузки настроек из chrome.storage:', chrome.runtime.lastError);
+        resolve({ db_source: 'txt', db_path: '', hash: '', auto_update: true });
+      } else if (result.settings && Object.keys(result.settings).length > 0) {
+        console.log('Настройки загружены из chrome.storage:', result.settings);
+        resolve(result.settings);
+      } else {
+        // Если в chrome.storage.local нет настроек, загружаем из settings.json
+        fetch(chrome.runtime.getURL('settings.json'))
+          .then(response => {
+            if (!response.ok) throw new Error('Не удалось загрузить settings.json');
+            return response.json();
+          })
+          .then(settings => {
+            console.log('Настройки загружены из settings.json:', settings);
+            // Сохраняем настройки в chrome.storage.local для последующего использования
+            chrome.storage.local.set({ settings }, () => {
+              if (chrome.runtime.lastError) {
+                console.error('Ошибка сохранения настроек из settings.json в chrome.storage:', chrome.runtime.lastError);
+              } else {
+                console.log('Настройки из settings.json сохранены в chrome.storage');
+              }
+            });
+            resolve(settings);
+          })
+          .catch(error => {
+            console.error('Ошибка загрузки settings.json:', error);
+            // Возвращаем значения по умолчанию в случае ошибки
+            resolve({ db_source: 'txt', db_path: '', hash: '', auto_update: true });
+          });
+      }
+    });
+  });
 }
 
 async function deleteDatabase() {
@@ -201,8 +253,19 @@ async function initDatabase(event) {
   const dbSource = document.getElementById('init_db_source').value;
   const dbFile = document.getElementById('init_db_file').files[0];
   try {
-    const settings = { db_source: dbSource, db_path: dbFile ? dbFile.name : '', hash: '' };
+    const settings = { db_source: dbSource, db_path: dbFile ? dbFile.name : '', hash: '', auto_update: true };
     await saveSettingsDB(settings);
+    await new Promise((resolve, reject) => {
+      chrome.storage.local.set({ settings }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Ошибка сохранения настроек в chrome.storage:', chrome.runtime.lastError);
+          reject(chrome.runtime.lastError);
+        } else {
+          console.log('Настройки сохранены в chrome.storage:', settings);
+          resolve();
+        }
+      });
+    });
     const result = await initDB(dbSource, dbFile);
     if (result.is_valid) {
       const notification = document.getElementById('success-notification');
@@ -235,13 +298,30 @@ async function getPublicIpInfo() {
   });
 }
 
+async function checkForUpdates() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: 'checkForUpdates' }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('Ошибка проверки обновлений:', chrome.runtime.lastError);
+        resolve({ updateAvailable: false, latestVersion: '' });
+      } else {
+        console.log('Результат проверки обновлений:', response);
+        resolve(response);
+      }
+    });
+  });
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   try {
     const tiles = await loadTiles();
     const ipInfo = await getPublicIpInfo();
     const dbStatus = await checkDBIntegrity();
-    const settings = await getSettings();
+    const settings = await loadSettings();
     const mapEl = await generateMap(ipInfo.lat, ipInfo.lon);
+
+    console.log('Инициализация страницы, настройки:', settings);
+
     document.getElementById('map').innerHTML = '';
     document.getElementById('map').appendChild(mapEl);
 
@@ -249,6 +329,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('country').textContent = ipInfo.country;
     document.getElementById('city').textContent = ipInfo.city;
     if (!ipInfo.city) document.getElementById('city').parentElement.style.display = 'none';
+
+    if (settings.auto_update) {
+      const updateInfo = await checkForUpdates();
+      if (updateInfo.updateAvailable) {
+        document.getElementById('update-available-version').textContent = updateInfo.latestVersion;
+        document.getElementById('update-available-modal').classList.add('show');
+      }
+    }
+
+    document.getElementById('auto_update').checked = settings.auto_update;
 
     const tilesContainer = document.querySelector('.tiles');
     tilesContainer.innerHTML = tiles.length
@@ -259,13 +349,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       : '<p class="debug-tiles">Плитки отсутствуют. Проверьте настройки или логи.</p>';
 
     if (!dbStatus.is_valid) {
-      document.getElementById('init_db_source').value = 'txt';
+      document.getElementById('init_db_source').value = settings.db_source || 'txt';
       document.getElementById('init-modal').classList.add('show');
     }
 
-    document.getElementById('db_source').value = settings.db_source;
+    document.getElementById('db_source').value = settings.db_source || 'txt';
     document.getElementById('db_file').value = '';
-    document.getElementById('init_db_source').value = settings.db_source;
+    document.getElementById('init_db_source').value = settings.db_source || 'txt';
     document.getElementById('init_db_file').value = '';
 
     const queryInput = document.getElementById('query');
@@ -303,13 +393,13 @@ document.addEventListener('DOMContentLoaded', async () => {
               <div class="warning">
                 <div class="warning-header">Найдены запрещённые материалы:</div>
                 <div class="warning-buttons">
-                  ${materials.map(m => `<button type="button" class="warning-btn" data-material-id="${m.id}">№ ${m.id}</button>`).join('')}
+                  ${materials.map(m => `<button type="button" class="warning-btn" data-material-id="${m.id}" data-similarity="${m.similarity}">№ ${m.id}</button>`).join('')}
                 </div>
                 ${materials.map(m => `<div id="material-${m.id}" data-date="${m.date}" style="display:none;">ID: ${m.id}, Дата: ${m.date}<br>Причина: ${m.material}</div>`).join('')}
               </div>
             `;
             document.querySelectorAll('.warning-btn').forEach(btn => {
-              btn.addEventListener('click', () => openModal(btn.getAttribute('data-material-id')));
+              btn.addEventListener('click', () => openModal(btn.getAttribute('data-material-id'), btn.getAttribute('data-similarity')));
             });
           } else {
             resultsContainer.innerHTML = `
@@ -319,6 +409,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                   <a href="https://www.google.com/search?q=${encodeURIComponent(query)}"><img src="https://upload.wikimedia.org/wikipedia/commons/3/3c/Google_Favicon_2025.svg" alt="Google"></a>
                   <a href="https://yandex.com/search/?text=${encodeURIComponent(query)}"><img src="https://upload.wikimedia.org/wikipedia/commons/5/58/Yandex_icon.svg" alt="Yandex"></a>
                   <a href="https://duckduckgo.com/?q=${encodeURIComponent(query)}"><img src="https://www.svgrepo.com/show/353679/duckduckgo.svg" alt="DuckDuckGo"></a>
+                  <a href="https://www.startpage.com/search?q=${encodeURIComponent(query)}"><img src="https://files.svgcdn.io/simple-icons/startpage.svg" alt="Startpage"></a>
+                  <a href="https://swisscows.com/web?query=${encodeURIComponent(query)}"><img src="https://swisscows.com/favicon.ico" alt="Swisscows"></a>
                 </div>
               </div>
             `;
@@ -373,6 +465,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
 
+    const checkUpdateBtn = document.getElementById('check-update-btn');
+    if (checkUpdateBtn) {
+      checkUpdateBtn.addEventListener('click', async () => {
+        const updateInfo = await checkForUpdates();
+        if (updateInfo.updateAvailable) {
+          document.getElementById('update-available-version').textContent = updateInfo.latestVersion;
+          document.getElementById('update-available-modal').classList.add('show');
+        } else {
+          document.getElementById('success-notification').textContent = 'Обновления не найдены';
+          document.getElementById('success-notification').classList.add('show');
+          setTimeout(() => {
+            document.getElementById('success-notification').classList.remove('show');
+          }, 2000);
+        }
+      });
+    }
+
     const addSiteBtn = document.getElementById('add-site-btn');
     if (addSiteBtn) addSiteBtn.addEventListener('click', openAddModal);
     const exportTilesBtn = document.getElementById('export-tiles-btn');
@@ -411,6 +520,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (cancelSettingsBtn) cancelSettingsBtn.addEventListener('click', closeModal);
     const closeUpdateBtn = document.getElementById('close-update-btn');
     if (closeUpdateBtn) closeUpdateBtn.addEventListener('click', () => location.assign('/'));
+    const closeUpdateAvailableBtn = document.getElementById('close-update-available-btn');
+    if (closeUpdateAvailableBtn) closeUpdateAvailableBtn.addEvent__,
+      document.getElementById('close-update-available-btn').addEventListener('click', closeModal);
     const dbSource = document.getElementById('db_source');
     if (dbSource) dbSource.addEventListener('change', () => {
       document.getElementById('db_file').style.display = document.getElementById('db_source').value === 'local_csv' || document.getElementById('db_source').value === 'txt' ? 'block' : 'none';

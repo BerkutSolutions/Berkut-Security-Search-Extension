@@ -3,6 +3,8 @@
  * If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+const CURRENT_VERSION = "1.0.0";
+
 chrome.action.onClicked.addListener(() => {
   chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
 });
@@ -48,6 +50,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           lon: 0.0
         });
       });
-    return true;
+  } else if (request.action === 'checkForUpdates') {
+    fetch('https://api.github.com/repos/BerkutSolutions/Berkut-Security-Search-Extension/releases/latest')
+      .then(response => {
+        if (!response.ok) throw new Error('Ошибка проверки обновлений');
+        return response.json();
+      })
+      .then(data => {
+        const latestVersion = data.tag_name.replace(/^v/, '');
+        sendResponse({
+          updateAvailable: latestVersion !== CURRENT_VERSION,
+          latestVersion: latestVersion
+        });
+      })
+      .catch(e => {
+        console.error('Ошибка проверки обновлений:', e);
+        sendResponse({ updateAvailable: false, error: e.message });
+      });
   }
+  return true;
 });
